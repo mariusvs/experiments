@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "staff-activity-tracker"
+version = "1.0.0"
+description = "Transparent, consent-based staff activity tracker for company-owned devices (macOS, Linux, Windows)."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = [
+    "psutil>=5.9",
+    "pynput>=1.7",
+]
+
+[project.optional-dependencies]
+# Nicer visible tray indicator.
+tray = ["pystray>=0.19", "Pillow>=9.0"]
+# Platform helpers (install the one matching the device's OS).
+macos = ["pyobjc-framework-Cocoa>=9.0", "pyobjc-framework-Quartz>=9.0"]
+linux = ["python-xlib>=0.33"]
+windows = ["pywin32>=305", "uiautomation>=2.0"]
+
+[project.scripts]
+staff-activity-tracker = "activity_tracker.__main__:main"
+
+[tool.setuptools]
+packages = ["activity_tracker", "activity_tracker.collectors"]

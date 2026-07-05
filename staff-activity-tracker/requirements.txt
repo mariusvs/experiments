@@ -1,0 +1,21 @@
+# Core (all platforms)
+psutil>=5.9
+pynput>=1.7
+
+# Optional visible tray indicator
+pystray>=0.19
+Pillow>=9.0
+
+# --- Install ONLY the block matching the device OS ---
+
+# macOS:
+#   pyobjc-framework-Cocoa>=9.0
+#   pyobjc-framework-Quartz>=9.0
+
+# Linux (X11):
+#   python-xlib>=0.33
+#   (or install the `xdotool` + `xprop` system packages as a fallback)
+
+# Windows:
+#   pywin32>=305
+#   uiautomation>=2.0   (needed for browser address-bar URL capture)

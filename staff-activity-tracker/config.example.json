@@ -1,0 +1,16 @@
+{
+  "sample_interval": 5.0,
+  "idle_threshold": 60.0,
+  "collect_active_window": true,
+  "collect_input_activity": true,
+  "collect_urls": true,
+  "data_dir": "",
+  "db_filename": "activity.sqlite3",
+  "require_consent": true,
+  "show_tray_indicator": true,
+  "upload_url": "",
+  "upload_token": "",
+  "upload_interval": 300.0,
+  "organization": "Your Company Ltd",
+  "device_label": "reception-pc-01"
+}
