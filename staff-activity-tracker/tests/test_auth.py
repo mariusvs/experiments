@@ -127,9 +127,12 @@ def test_gating_redirects_and_allows(monkeypatch=None):
         assert sess
         session_val = sess[0].split("=", 1)[1].split(";", 1)[0]
 
-        # 4. app route now returns 200 with the session cookie
+        # 4. app route now returns 200 with the session cookie, and the page
+        #    carries the signed-in identity for the "signed in as … · sign out" chip
         status, _, body, _ = _get(port, "/", cookie=f"sat_session={session_val}")
         assert status == 200 and b"<!doctype html>" in body.lower()
+        assert b"marius@scigrow.tech" in body
+        assert b"/auth/logout" in body
 
         # 5. an unauthorized email is rejected at callback
         auth_mod.fetch_email = lambda cfg, tok: "outsider@gmail.com"

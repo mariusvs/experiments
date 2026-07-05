@@ -59,13 +59,13 @@ def collect_user_data(config: Config, user: str, days: int, weeks: int,
     return detail
 
 
-def render_page(data: dict) -> str:
-    payload = json.dumps(data).replace("</", "<\\/")  # avoid closing the script tag
+def render_page(data: dict, viewer=None) -> str:
+    payload = json.dumps({**data, "_viewer": viewer}).replace("</", "<\\/")
     return _PAGE_TEMPLATE.replace("__DATA__", payload)
 
 
-def render_user_page(data: dict) -> str:
-    payload = json.dumps(data).replace("</", "<\\/")
+def render_user_page(data: dict, viewer=None) -> str:
+    payload = json.dumps({**data, "_viewer": viewer}).replace("</", "<\\/")
     return _USER_TEMPLATE.replace("__DATA__", payload)
 
 
@@ -131,9 +131,11 @@ class _Handler(BaseHTTPRequestHandler):
         return self._handle_app(route)
 
     def _handle_app(self, route: str) -> None:
+        viewer = self._current_user()
         if route in ("/", "/index.html"):
             data = collect_data(self.config, self.days, self.weeks, self.period_days)
-            self._send(200, render_page(data).encode("utf-8"), "text/html; charset=utf-8")
+            self._send(200, render_page(data, viewer).encode("utf-8"),
+                       "text/html; charset=utf-8")
         elif route == "/api/data.json":
             data = collect_data(self.config, self.days, self.weeks, self.period_days)
             self._send(200, json.dumps(data, indent=2).encode("utf-8"),
@@ -142,7 +144,7 @@ class _Handler(BaseHTTPRequestHandler):
             user = unquote(route[len("/user/"):])
             data = collect_user_data(self.config, user, self.days, self.weeks,
                                      self.period_days)
-            self._send(200, render_user_page(data).encode("utf-8"),
+            self._send(200, render_user_page(data, viewer).encode("utf-8"),
                        "text/html; charset=utf-8")
         elif route == "/api/user.json":
             from urllib.parse import parse_qs
@@ -272,9 +274,14 @@ _PAGE_TEMPLATE = r"""<!doctype html>
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--ink);
     font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
-  header { padding:20px 24px; border-bottom:1px solid var(--line); }
+  header { padding:20px 24px; border-bottom:1px solid var(--line);
+    display:flex; align-items:center; justify-content:space-between; gap:16px; }
   h1 { margin:0; font-size:18px; }
   .sub { color:var(--muted); font-size:12px; margin-top:4px; }
+  .account { color:var(--muted); font-size:12.5px; text-align:right; white-space:nowrap; }
+  .account b { color:var(--ink); font-weight:600; }
+  .account a { color:var(--accent); text-decoration:none; }
+  .account a:hover { text-decoration:underline; }
   main { padding:20px 24px; max-width:1100px; margin:0 auto; display:grid; gap:20px; }
   .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px;
     padding:16px 18px; }
@@ -302,8 +309,11 @@ _PAGE_TEMPLATE = r"""<!doctype html>
 </head>
 <body>
 <header>
-  <h1 id="title">Staff Activity Dashboard</h1>
-  <div class="sub" id="subtitle"></div>
+  <div>
+    <h1 id="title">Staff Activity Dashboard</h1>
+    <div class="sub" id="subtitle"></div>
+  </div>
+  <div class="account" id="account"></div>
 </header>
 <main>
   <section class="panel" id="alertsPanel" style="display:none">
@@ -343,6 +353,10 @@ function header() {
   $('subtitle').textContent =
     `Last ${DATA.range_days} days · ${DATA.team.headcount} people · `
     + `${DATA.team.range.samples} samples`;
+  if (DATA._viewer) {
+    $('account').innerHTML = `signed in as <b>${esc(DATA._viewer)}</b><br>`
+      + `<a href="/auth/logout">Sign out</a>`;
+  }
 }
 
 function card(big, lbl, color) {
@@ -485,10 +499,13 @@ _USER_TEMPLATE = r"""<!doctype html>
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--ink);
     font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
-  header { padding:20px 24px; border-bottom:1px solid var(--line); }
+  header { padding:20px 24px; border-bottom:1px solid var(--line);
+    display:flex; align-items:center; justify-content:space-between; gap:16px; }
   h1 { margin:0; font-size:18px; }
   a { color:#4aa3ff; text-decoration:none; }
   .sub { color:var(--muted); font-size:12px; margin-top:4px; }
+  .account { color:var(--muted); font-size:12.5px; text-align:right; white-space:nowrap; }
+  .account b { color:var(--ink); font-weight:600; }
   main { padding:20px 24px; max-width:1000px; margin:0 auto; display:grid; gap:20px; }
   .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px;
     padding:16px 18px; }
@@ -512,9 +529,12 @@ _USER_TEMPLATE = r"""<!doctype html>
 </head>
 <body>
 <header>
-  <a href="/">← all staff</a>
-  <h1 id="title"></h1>
-  <div class="sub" id="subtitle"></div>
+  <div>
+    <a href="/">← all staff</a>
+    <h1 id="title"></h1>
+    <div class="sub" id="subtitle"></div>
+  </div>
+  <div class="account" id="account"></div>
 </header>
 <main>
   <section class="panel"><h2>Summary</h2><div class="cards" id="cards"></div></section>
@@ -536,6 +556,9 @@ const scoreColor=(s)=>s>=75?'#2ecc71':s>=50?'#f1c40f':'#e74c3c';
 
 $('title').textContent = D.user;
 $('subtitle').textContent = `${D.organization||''}  ·  last ${D.range_days} days  ·  ${D.range.samples} samples`;
+if (D._viewer) {
+  $('account').innerHTML = `signed in as <b>${esc(D._viewer)}</b><br><a href="/auth/logout">Sign out</a>`;
+}
 
 function cards() {
   if (!D.summary) { $('cards').innerHTML = '<p class="muted">No data in range.</p>'; return; }
