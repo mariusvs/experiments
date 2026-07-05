@@ -54,6 +54,10 @@ class Config:
     organization: str = ""
     device_label: str = ""
 
+    # Path to a JSON file classifying apps/domains as productive/neutral/
+    # distracting for the efficiency report. Blank = nothing categorized.
+    categories_file: str = ""
+
     @property
     def db_path(self) -> Path:
         return Path(self.data_dir) / self.db_filename

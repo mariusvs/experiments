@@ -12,5 +12,6 @@
   "upload_token": "",
   "upload_interval": 300.0,
   "organization": "Your Company Ltd",
-  "device_label": "reception-pc-01"
+  "device_label": "reception-pc-01",
+  "categories_file": "categories.example.json"
 }

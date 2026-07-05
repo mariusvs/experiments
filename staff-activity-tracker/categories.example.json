@@ -1,0 +1,31 @@
+{
+  "_comment": "Edit these lists to match how YOUR team works. Matching is case-insensitive substring on the app/process name and on the URL host. An app/site that matches nothing is counted as 'uncategorized' (neither rewarded nor penalized). Do not treat these defaults as objective truth — a browser or a chat app is 'productive' for some roles and 'distracting' for others.",
+  "productive": {
+    "apps": [
+      "code", "devenv", "pycharm", "intellij", "webstorm", "sublime", "vim", "emacs",
+      "excel", "word", "powerpoint", "outlook", "onenote", "libreoffice", "wps",
+      "photoshop", "illustrator", "figma", "autocad", "blender",
+      "terminal", "iterm", "powershell", "cmd", "wsl",
+      "slack", "teams", "zoom", "webex", "notion", "obsidian", "jira", "confluence"
+    ],
+    "domains": [
+      "github.com", "gitlab.com", "bitbucket.org", "stackoverflow.com",
+      "docs.google.com", "sheets.google.com", "drive.google.com",
+      "atlassian.net", "jira", "confluence", "figma.com", "notion.so",
+      "salesforce.com", "hubspot.com", "zendesk.com", "linear.app",
+      "office.com", "sharepoint.com", "outlook.com"
+    ]
+  },
+  "neutral": {
+    "apps": ["finder", "explorer", "settings", "calculator", "spotify", "music"],
+    "domains": ["google.com", "bing.com", "duckduckgo.com", "wikipedia.org", "mail.google.com"]
+  },
+  "distracting": {
+    "apps": ["steam", "epicgames", "discord", "battlenet"],
+    "domains": [
+      "youtube.com", "facebook.com", "instagram.com", "tiktok.com", "twitter.com",
+      "x.com", "reddit.com", "netflix.com", "twitch.tv", "9gag.com",
+      "amazon.com", "ebay.com", "aliexpress.com"
+    ]
+  }
+}

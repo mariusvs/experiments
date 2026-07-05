@@ -138,6 +138,65 @@ Keep it a *user* session service so it runs inside the logged-in desktop session
 
 ---
 
+## Measuring efficiency
+
+The `efficiency` command turns raw samples into a per-user productivity view:
+
+```bash
+python -m activity_tracker efficiency --config myconfig.json --days 7
+python -m activity_tracker efficiency --config myconfig.json --categories categories.json --json
+```
+
+Example output:
+
+```
+● alice   efficiency score: 88.5 / 100
+    tracked 1h 15m 00s | active 1h 03m 00s (84%) | idle 0h 12m 00s
+    productive share of active time: 87%
+    time by category: distracting=0h 08m 00s, productive=0h 55m 00s
+    focus: avg task 0h 31m 30s, longest 0h 40m 00s, 1.0 switches/active-hr
+    top productive: code.exe (0h 40m 00s), github.com (0h 15m 00s)
+    top distracting: youtube.com (0h 08m 00s)
+```
+
+**What the score measures.** It is a transparent, tunable blend of three ratios:
+
+```
+score = 100 × (0.40·active_ratio + 0.40·productive_ratio + 0.20·focus_factor)
+```
+
+- `active_ratio` — active time ÷ tracked time (at the machine, not idle)
+- `productive_ratio` — time in productive apps/sites ÷ active time
+- `focus_factor` — average uninterrupted time-on-task, capped at a target
+  (default 10 min = full marks); rewards sustained work over constant
+  context-switching
+
+**What it deliberately ignores.** Keystroke and mouse counts are **not** part of
+the score. Input volume rewards mashing keys and jiggling the mouse, not doing
+good work — a test (`test_score_excludes_input_counts`) asserts that two people
+with identical time/focus but 1 vs. 9999 keystrokes get the *same* score.
+
+**Define "productive" for your team.** Edit `categories.example.json` (or point
+`categories_file` at your own). Apps/domains are matched case-insensitively; a
+URL host match beats an app match, and `distracting` beats `productive` so a
+distracting site inside a work browser still counts as distracting. Anything that
+matches nothing is `uncategorized` — neither rewarded nor penalized. The defaults
+are a starting point, not objective truth: a browser or chat app is productive
+for some roles and a distraction for others.
+
+**Please read this before you act on a score.** These numbers reflect *time
+allocation and focus at one desktop*, nothing more. They cannot see thinking,
+reading on paper, whiteboard sessions, meetings away from the machine, phone
+calls, mentoring, or good work done slowly and carefully. A high score is not
+proof of value and a low score is not proof of slacking — someone debugging a
+hard problem may look "idle," and someone who looks busy may be producing
+nothing useful. Use these reports to spot *patterns worth a conversation* (a
+sudden change, a team-wide tooling problem, a workload imbalance), not as an
+automated performance verdict or a basis for discipline on their own. Tie pay,
+promotion, or firing to a dashboard number and you will get gamed metrics, a
+culture of fear, and — in several jurisdictions — legal exposure around automated
+decision-making. Measure outcomes; use this to inform, not to judge.
+
 ## Configuration
 
 `init-config` writes a JSON file; see `config.example.json`. Key options:
@@ -152,6 +211,7 @@ Keep it a *user* session service so it runs inside the logged-in desktop session
 | `show_tray_indicator` | Show the visible "monitoring active" tray icon |
 | `upload_url` / `upload_token` / `upload_interval` | Optional central collection endpoint (HTTPS POST, Bearer auth) |
 | `organization` / `device_label` | Labels attached to records/reports |
+| `categories_file` | JSON classifying apps/domains for the efficiency report |
 
 ### Central collection (optional)
 
@@ -175,12 +235,13 @@ server to your own retention and access-control requirements.
 
 ```
 activity_tracker/
-  __main__.py            CLI: run / report / notice / init-config
+  __main__.py            CLI: run / report / efficiency / notice / init-config
   config.py              config dataclass + platform data dirs
   consent.py             notice text + one-time acknowledgement gate
   storage.py             SQLite schema + queries (no key-content column)
   agent.py               sampling loop + optional uploader
   report.py              aggregation, text/JSON rendering, upload
+  efficiency.py          productivity scoring (time + focus, not keystrokes)
   tray.py                optional visible tray indicator
   collectors/
     base.py              WindowInfo + platform dispatch
@@ -189,6 +250,7 @@ activity_tracker/
     linux.py             X11 active window (Wayland-aware)
     input_activity.py    keystroke/mouse COUNTS only (never content)
 tests/test_core.py       headless tests (incl. the no-content guard)
+tests/test_efficiency.py efficiency scoring tests (incl. the input-volume guard)
 ```
 
 ## Tests
