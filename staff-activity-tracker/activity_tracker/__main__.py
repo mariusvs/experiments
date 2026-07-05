@@ -3,6 +3,9 @@
     python -m activity_tracker run [--config PATH] [--yes]
     python -m activity_tracker report [--config PATH] [--days N] [--json]
     python -m activity_tracker efficiency [--config PATH] [--categories PATH] [--days N] [--json]
+    python -m activity_tracker trends [--config PATH] [--weeks N] [--period-days N] [--json]
+    python -m activity_tracker team [--config PATH] [--days N] [--json]
+    python -m activity_tracker dashboard [--config PATH] [--host H] [--port P]
     python -m activity_tracker notice [--config PATH]
     python -m activity_tracker init-config PATH
 """
@@ -60,6 +63,51 @@ def cmd_efficiency(args) -> int:
     return 0
 
 
+def cmd_trends(args) -> int:
+    from .storage import Storage
+    from . import analytics
+    config = Config.load(args.config)
+    categories = args.categories or config.categories_file or None
+    storage = Storage(config.db_path)
+    try:
+        rep = analytics.build_trends(
+            storage, categories_path=categories,
+            num_periods=args.weeks, period_days=args.period_days)
+    finally:
+        storage.close()
+    if args.json:
+        print(json.dumps(rep, indent=2))
+    else:
+        print(analytics.render_trends_text(rep))
+    return 0
+
+
+def cmd_team(args) -> int:
+    from .storage import Storage
+    from . import analytics, report as report_mod
+    config = Config.load(args.config)
+    categories = args.categories or config.categories_file or None
+    storage = Storage(config.db_path)
+    try:
+        since = report_mod.default_since(args.days) if args.days else None
+        rep = analytics.team_rollup(storage, categories_path=categories, since=since)
+    finally:
+        storage.close()
+    if args.json:
+        print(json.dumps(rep, indent=2))
+    else:
+        print(analytics.render_team_text(rep))
+    return 0
+
+
+def cmd_dashboard(args) -> int:
+    from . import dashboard
+    config = Config.load(args.config)
+    return dashboard.serve(
+        config, host=args.host, port=args.port,
+        days=args.days, weeks=args.weeks, period_days=args.period_days)
+
+
 def cmd_notice(args) -> int:
     config = Config.load(args.config)
     print(consent.notice_text(config.upload_url))
@@ -98,6 +146,30 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--days", type=int, default=1, help="Look back this many days")
     e.add_argument("--json", action="store_true", help="Emit JSON instead of text")
     e.set_defaults(func=cmd_efficiency)
+
+    tr = sub.add_parser("trends", help="Week-over-week per-person efficiency trends")
+    tr.add_argument("--config", help="Path to JSON config file")
+    tr.add_argument("--categories", help="Path to categories JSON (overrides config)")
+    tr.add_argument("--weeks", type=int, default=8, help="Number of periods to compare")
+    tr.add_argument("--period-days", type=int, default=7, help="Days per period")
+    tr.add_argument("--json", action="store_true", help="Emit JSON instead of text")
+    tr.set_defaults(func=cmd_trends)
+
+    tm = sub.add_parser("team", help="Team-level roll-up across all users")
+    tm.add_argument("--config", help="Path to JSON config file")
+    tm.add_argument("--categories", help="Path to categories JSON (overrides config)")
+    tm.add_argument("--days", type=int, default=7, help="Look back this many days")
+    tm.add_argument("--json", action="store_true", help="Emit JSON instead of text")
+    tm.set_defaults(func=cmd_team)
+
+    db = sub.add_parser("dashboard", help="Serve a local web dashboard")
+    db.add_argument("--config", help="Path to JSON config file")
+    db.add_argument("--host", default="127.0.0.1", help="Bind host (default localhost)")
+    db.add_argument("--port", type=int, default=8787, help="Bind port")
+    db.add_argument("--days", type=int, default=7, help="Range for the per-person view")
+    db.add_argument("--weeks", type=int, default=8, help="Periods in the trend chart")
+    db.add_argument("--period-days", type=int, default=7, help="Days per trend period")
+    db.set_defaults(func=cmd_dashboard)
 
     n = sub.add_parser("notice", help="Print the monitoring notice text")
     n.add_argument("--config", help="Path to JSON config file")

@@ -171,63 +171,91 @@ def build_efficiency(
     for r in rows:
         by_user[r["user"] or "unknown"].append(r)
 
-    users_out = []
-    for user, samples in sorted(by_user.items()):
-        tracked = active = idle = 0.0
-        cat_time: dict[str, float] = defaultdict(float)
-        app_by_cat: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
-
-        for r in samples:
-            dur = r["duration"] or 0.0
-            tracked += dur
-            if r["idle"]:
-                idle += dur
-                continue  # idle time is not attributed to any app category
-            active += dur
-            cat = categorize(r["app"], r["url"], cats)
-            cat_time[cat] += dur
-            label = (_url_host(r["url"]) or r["app"] or "unknown")
-            app_by_cat[cat][label] += dur
-
-        productive = cat_time.get("productive", 0.0)
-        distracting = cat_time.get("distracting", 0.0)
-        active_ratio = (active / tracked) if tracked else 0.0
-        productive_ratio = (productive / active) if active else 0.0
-        avg_focus, longest_focus, switches = _focus_stats(samples)
-        score = _score(active_ratio, productive_ratio, avg_focus, weights)
-
-        # switches per active hour is a fairer context-switch measure than a raw count
-        switches_per_hour = round(switches / (active / 3600), 1) if active else 0.0
-
-        def top_labels(cat: str, n: int = 5):
-            items = sorted(app_by_cat.get(cat, {}).items(), key=lambda kv: kv[1], reverse=True)
-            return [{"name": k, "human": _fmt_hms(v)} for k, v in items[:n]]
-
-        users_out.append({
-            "user": user,
-            "efficiency_score": score,
-            "tracked_time": _fmt_hms(tracked),
-            "active_time": _fmt_hms(active),
-            "idle_time": _fmt_hms(idle),
-            "active_ratio": round(active_ratio, 3),
-            "productive_ratio": round(productive_ratio, 3),
-            "category_time": {k: _fmt_hms(v) for k, v in sorted(cat_time.items())},
-            "focus": {
-                "avg_session": _fmt_hms(avg_focus),
-                "longest_session": _fmt_hms(longest_focus),
-                "context_switches": switches,
-                "switches_per_active_hour": switches_per_hour,
-            },
-            "top_productive": top_labels("productive"),
-            "top_distracting": top_labels("distracting"),
-        })
-
+    users_out = [
+        _format_user(compute_user_metrics(samples, cats, weights))
+        for _, samples in sorted(by_user.items())
+    ]
     users_out.sort(key=lambda u: u["efficiency_score"], reverse=True)
     return {
         "range": {"since": since, "until": until, "samples": len(rows)},
         "weights": weights,
         "focus_target_seconds": FOCUS_TARGET_SECONDS,
         "users": users_out,
+    }
+
+
+def compute_user_metrics(samples: list, cats: dict, weights: Optional[dict] = None) -> dict:
+    """Compute NUMERIC efficiency metrics for one user's samples.
+
+    Returns raw numbers (seconds, ratios) so callers can compute deltas and
+    aggregates. Use ``_format_user`` to turn this into the human-facing shape.
+    """
+    weights = weights or DEFAULT_WEIGHTS
+    user = samples[0]["user"] if samples else "unknown"
+    tracked = active = idle = 0.0
+    cat_time: dict[str, float] = defaultdict(float)
+    app_by_cat: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+
+    for r in samples:
+        dur = r["duration"] or 0.0
+        tracked += dur
+        if r["idle"]:
+            idle += dur
+            continue  # idle time is not attributed to any app category
+        active += dur
+        cat = categorize(r["app"], r["url"], cats)
+        cat_time[cat] += dur
+        label = (_url_host(r["url"]) or r["app"] or "unknown")
+        app_by_cat[cat][label] += dur
+
+    productive = cat_time.get("productive", 0.0)
+    active_ratio = (active / tracked) if tracked else 0.0
+    productive_ratio = (productive / active) if active else 0.0
+    avg_focus, longest_focus, switches = _focus_stats(samples)
+    score = _score(active_ratio, productive_ratio, avg_focus, weights)
+    switches_per_hour = round(switches / (active / 3600), 1) if active else 0.0
+
+    return {
+        "user": user,
+        "score": score,
+        "tracked": tracked,
+        "active": active,
+        "idle": idle,
+        "active_ratio": active_ratio,
+        "productive_ratio": productive_ratio,
+        "cat_time": dict(cat_time),
+        "app_by_cat": {k: dict(v) for k, v in app_by_cat.items()},
+        "avg_focus": avg_focus,
+        "longest_focus": longest_focus,
+        "switches": switches,
+        "switches_per_hour": switches_per_hour,
+    }
+
+
+def _top_labels(app_by_cat: dict, cat: str, n: int = 5) -> list:
+    items = sorted(app_by_cat.get(cat, {}).items(), key=lambda kv: kv[1], reverse=True)
+    return [{"name": k, "human": _fmt_hms(v)} for k, v in items[:n]]
+
+
+def _format_user(m: dict) -> dict:
+    """Turn numeric metrics from ``compute_user_metrics`` into the report shape."""
+    return {
+        "user": m["user"],
+        "efficiency_score": m["score"],
+        "tracked_time": _fmt_hms(m["tracked"]),
+        "active_time": _fmt_hms(m["active"]),
+        "idle_time": _fmt_hms(m["idle"]),
+        "active_ratio": round(m["active_ratio"], 3),
+        "productive_ratio": round(m["productive_ratio"], 3),
+        "category_time": {k: _fmt_hms(v) for k, v in sorted(m["cat_time"].items())},
+        "focus": {
+            "avg_session": _fmt_hms(m["avg_focus"]),
+            "longest_session": _fmt_hms(m["longest_focus"]),
+            "context_switches": m["switches"],
+            "switches_per_active_hour": m["switches_per_hour"],
+        },
+        "top_productive": _top_labels(m["app_by_cat"], "productive"),
+        "top_distracting": _top_labels(m["app_by_cat"], "distracting"),
     }
 
 

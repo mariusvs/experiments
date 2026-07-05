@@ -197,6 +197,57 @@ promotion, or firing to a dashboard number and you will get gamed metrics, a
 culture of fear, and — in several jurisdictions — legal exposure around automated
 decision-making. Measure outcomes; use this to inform, not to judge.
 
+## Trends, team roll-ups, and the dashboard
+
+Three commands turn the collected data into something you can act on without
+over-focusing on any one person on any one day.
+
+### Trends — week over week, per person
+
+```bash
+python -m activity_tracker trends --config myconfig.json --weeks 8 --period-days 7
+```
+
+Compares each person's most recent period against the previous one and shows the
+direction of travel (a small sparkline plus deltas). Change over time is far more
+meaningful than an absolute number — a steady 70 is fine; a drop from 90 to 60 is
+the thing worth a conversation.
+
+```
+● alice: score 90.8/100  (-9.2 vs prev)
+    trend ▁█▅  (2026-06-14 → 2026-06-28)
+    Δ active -23.1%, Δ productive +0.0%, Δ active-hours +0.08
+```
+
+### Team roll-up — the whole team as one unit
+
+```bash
+python -m activity_tracker team --config myconfig.json --days 7
+```
+
+Aggregates everyone into team totals, an aggregate active/productive ratio, and
+the mean individual score. This is the **safer default lens**: it surfaces
+workload imbalance and team-wide tooling problems without ranking individuals
+against each other.
+
+### Dashboard — a local web view
+
+```bash
+python -m activity_tracker dashboard --config myconfig.json --port 8787
+# then open http://127.0.0.1:8787
+```
+
+A self-contained web page (team cards, a weekly-trend line chart, and a
+per-person table with week-over-week deltas). It uses only the Python standard
+library and embeds its data inline — **no external CDN, fonts, or network calls**,
+so it works fully offline. A JSON version of the same data is at `/api/data.json`.
+
+> **Security:** the dashboard has **no authentication** and shows staff activity
+> data. It binds to `127.0.0.1` by default — keep it there. If you must reach it
+> from another machine, put it behind a VPN or an authenticating reverse proxy;
+> do not expose it to the internet. Access to these reports should be limited to
+> the specific managers/HR who have a legitimate need.
+
 ## Configuration
 
 `init-config` writes a JSON file; see `config.example.json`. Key options:
@@ -242,6 +293,8 @@ activity_tracker/
   agent.py               sampling loop + optional uploader
   report.py              aggregation, text/JSON rendering, upload
   efficiency.py          productivity scoring (time + focus, not keystrokes)
+  analytics.py           week-over-week trends + team roll-ups
+  dashboard.py           self-contained stdlib web dashboard
   tray.py                optional visible tray indicator
   collectors/
     base.py              WindowInfo + platform dispatch
@@ -251,6 +304,7 @@ activity_tracker/
     input_activity.py    keystroke/mouse COUNTS only (never content)
 tests/test_core.py       headless tests (incl. the no-content guard)
 tests/test_efficiency.py efficiency scoring tests (incl. the input-volume guard)
+tests/test_analytics.py  trends, team roll-up, and dashboard-page tests
 ```
 
 ## Tests
