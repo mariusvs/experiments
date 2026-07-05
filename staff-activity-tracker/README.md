@@ -242,11 +242,70 @@ per-person table with week-over-week deltas). It uses only the Python standard
 library and embeds its data inline — **no external CDN, fonts, or network calls**,
 so it works fully offline. A JSON version of the same data is at `/api/data.json`.
 
+Click any person's name (or an alert's **view →**) to open a **per-person
+drill-down** at `/user/<name>`: their summary cards, a daily active-hours bar
+chart, a weekly score trend, and their top productive/distracting apps and sites.
+
 > **Security:** the dashboard has **no authentication** and shows staff activity
 > data. It binds to `127.0.0.1` by default — keep it there. If you must reach it
 > from another machine, put it behind a VPN or an authenticating reverse proxy;
 > do not expose it to the internet. Access to these reports should be limited to
 > the specific managers/HR who have a legitimate need.
+
+## Alerts
+
+```bash
+python -m activity_tracker alerts --config myconfig.json
+python -m activity_tracker alerts --config myconfig.json --webhook   # also POST them
+```
+
+Flags patterns worth a human look, based on thresholds in your config (each rule
+is disabled when its threshold is `0`):
+
+| Config key | Fires when |
+| --- | --- |
+| `alert_weekly_score_drop` | Efficiency score fell by ≥ this many points week-over-week |
+| `alert_min_active_ratio` | Active-of-tracked ratio fell below this (0–1) |
+| `alert_max_distracting_ratio` | Distracting-of-active ratio rose above this (0–1) |
+| `alert_min_active_hours` | Weekly active hours fell below this |
+
+Alerts also appear as a banner at the top of the dashboard. Set
+`alert_webhook_url` to receive them as an HTTPS POST (e.g. into Slack via an
+incoming-webhook relay). **An alert is a prompt to look, not a verdict** — a low
+week is very often leave, illness, or heads-down work that never touches the
+desktop. The tool says so, in the output and on the dashboard, on purpose.
+
+## Exporting data (CSV / PDF)
+
+```bash
+# raw samples for a spreadsheet or your own analysis
+python -m activity_tracker export samples-csv out.csv --days 30
+
+# one row per person with their efficiency summary
+python -m activity_tracker export efficiency-csv team.csv --days 7
+
+# a shareable PDF combining team roll-up, per-person, and trends
+python -m activity_tracker export pdf report.pdf --days 7
+```
+
+The PDF writer is **pure standard library** (no reportlab/wkhtmltopdf), so exports
+work anywhere the tool installs.
+
+## Data retention & auto-purge
+
+Keeping personal data no longer than necessary is a core data-protection
+principle (and a legal requirement under GDPR and similar regimes). Set
+`retention_days` in your config (default **90**; `0` disables). The agent purges
+samples older than the window on startup and once a day, and you can run it
+manually:
+
+```bash
+python -m activity_tracker purge --config myconfig.json          # uses retention_days
+python -m activity_tracker purge --config myconfig.json --days 30
+```
+
+Choose the shortest window that meets your actual business need, and document
+why in your monitoring policy.
 
 ## Configuration
 
@@ -263,6 +322,8 @@ so it works fully offline. A JSON version of the same data is at `/api/data.json
 | `upload_url` / `upload_token` / `upload_interval` | Optional central collection endpoint (HTTPS POST, Bearer auth) |
 | `organization` / `device_label` | Labels attached to records/reports |
 | `categories_file` | JSON classifying apps/domains for the efficiency report |
+| `retention_days` | Delete samples older than this many days (0 = keep forever) |
+| `alert_*` | Alert thresholds (see the Alerts section) |
 
 ### Central collection (optional)
 
@@ -293,8 +354,12 @@ activity_tracker/
   agent.py               sampling loop + optional uploader
   report.py              aggregation, text/JSON rendering, upload
   efficiency.py          productivity scoring (time + focus, not keystrokes)
-  analytics.py           week-over-week trends + team roll-ups
-  dashboard.py           self-contained stdlib web dashboard
+  analytics.py           week-over-week trends, team roll-ups, per-user detail
+  alerts.py              threshold alerts (score drop, low active, distracting)
+  retention.py           delete samples older than retention_days
+  export.py              CSV + PDF export
+  pdf.py                 minimal pure-stdlib PDF writer
+  dashboard.py           self-contained stdlib web dashboard + per-person pages
   tray.py                optional visible tray indicator
   collectors/
     base.py              WindowInfo + platform dispatch
@@ -305,6 +370,7 @@ activity_tracker/
 tests/test_core.py       headless tests (incl. the no-content guard)
 tests/test_efficiency.py efficiency scoring tests (incl. the input-volume guard)
 tests/test_analytics.py  trends, team roll-up, and dashboard-page tests
+tests/test_features.py   retention, alerts, CSV/PDF export, per-user drill-down
 ```
 
 ## Tests

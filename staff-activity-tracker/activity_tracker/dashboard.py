@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Optional
+from urllib.parse import unquote, urlparse
 
+from . import alerts as alerts_mod
 from . import analytics, efficiency
 from .config import Config
 from .storage import Storage
@@ -28,6 +29,8 @@ def collect_data(config: Config, days: int, weeks: int, period_days: int) -> dic
         team = analytics.team_rollup(storage, categories_path=cats, since=since)
         trends = analytics.build_trends(
             storage, categories_path=cats, num_periods=weeks, period_days=period_days)
+        alerts = alerts_mod.evaluate(storage, config, categories_path=cats,
+                                     period_days=period_days)
     finally:
         storage.close()
     return {
@@ -36,12 +39,34 @@ def collect_data(config: Config, days: int, weeks: int, period_days: int) -> dic
         "efficiency": eff,
         "team": team,
         "trends": trends,
+        "alerts": alerts,
     }
+
+
+def collect_user_data(config: Config, user: str, days: int, weeks: int,
+                      period_days: int) -> dict:
+    cats = config.categories_file or None
+    storage = Storage(config.db_path)
+    try:
+        since = report_mod.default_since(days)
+        detail = analytics.user_detail(
+            storage, user, categories_path=cats, since=since,
+            num_periods=weeks, period_days=period_days)
+    finally:
+        storage.close()
+    detail["organization"] = config.organization
+    detail["range_days"] = days
+    return detail
 
 
 def render_page(data: dict) -> str:
     payload = json.dumps(data).replace("</", "<\\/")  # avoid closing the script tag
     return _PAGE_TEMPLATE.replace("__DATA__", payload)
+
+
+def render_user_page(data: dict) -> str:
+    payload = json.dumps(data).replace("</", "<\\/")
+    return _USER_TEMPLATE.replace("__DATA__", payload)
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -62,11 +87,26 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):  # noqa: N802 (http.server API)
-        if self.path in ("/", "/index.html"):
+        route = urlparse(self.path).path
+        if route in ("/", "/index.html"):
             data = collect_data(self.config, self.days, self.weeks, self.period_days)
             self._send(200, render_page(data).encode("utf-8"), "text/html; charset=utf-8")
-        elif self.path.startswith("/api/data.json"):
+        elif route == "/api/data.json":
             data = collect_data(self.config, self.days, self.weeks, self.period_days)
+            self._send(200, json.dumps(data, indent=2).encode("utf-8"),
+                       "application/json; charset=utf-8")
+        elif route.startswith("/user/"):
+            user = unquote(route[len("/user/"):])
+            data = collect_user_data(self.config, user, self.days, self.weeks,
+                                     self.period_days)
+            self._send(200, render_user_page(data).encode("utf-8"),
+                       "text/html; charset=utf-8")
+        elif route == "/api/user.json":
+            from urllib.parse import parse_qs
+            q = parse_qs(urlparse(self.path).query)
+            user = (q.get("u") or [""])[0]
+            data = collect_user_data(self.config, user, self.days, self.weeks,
+                                     self.period_days)
             self._send(200, json.dumps(data, indent=2).encode("utf-8"),
                        "application/json; charset=utf-8")
         else:
@@ -149,6 +189,11 @@ _PAGE_TEMPLATE = r"""<!doctype html>
   <div class="sub" id="subtitle"></div>
 </header>
 <main>
+  <section class="panel" id="alertsPanel" style="display:none">
+    <h2>Alerts</h2>
+    <div id="alerts"></div>
+  </section>
+
   <section class="panel">
     <h2>Team roll-up</h2>
     <div class="cards" id="teamCards"></div>
@@ -250,6 +295,22 @@ function trendChart() {
 }
 function p_label(periods,i){ return periods[i]; }
 
+function alertsPanel() {
+  const alerts = DATA.alerts || [];
+  if (!alerts.length) return;
+  $('alertsPanel').style.display = '';
+  const dot = {high:'#e74c3c', medium:'#f1c40f', low:'#95a5a6'};
+  $('alerts').innerHTML = alerts.map(a =>
+    `<div style="padding:6px 0;border-bottom:1px solid var(--line)">`
+    + `<span style="color:${dot[a.severity]||'#888'}">●</span> `
+    + `<b>${esc(a.user)}</b> `
+    + `<span class="muted">[${esc(a.severity)}]</span> ${esc(a.message)} `
+    + `<a href="/user/${encodeURIComponent(a.user)}">view →</a></div>`
+  ).join('')
+  + '<div class="note">An alert is a prompt to look, not a verdict — a low week '
+  + 'is often leave, illness, or heads-down work that never reaches the desktop.</div>';
+}
+
 function peopleTable() {
   const users = DATA.efficiency.users;
   const trendByUser = {};
@@ -265,7 +326,7 @@ function peopleTable() {
       deltaCell = `<span class="${up?'delta-up':'delta-down'}">`
         + `${up?'▲':'▼'} ${Math.abs(d.score)}</span>`;
     }
-    html += `<tr><td>${esc(u.user)}</td>`
+    html += `<tr><td><a href="/user/${encodeURIComponent(u.user)}">${esc(u.user)}</a></td>`
       + `<td class="num"><span class="scorepill" style="background:${scoreColor(u.efficiency_score)}">`
       + `${u.efficiency_score}</span></td>`
       + `<td>${deltaCell}</td>`
@@ -285,7 +346,147 @@ function disclaimer() {
     + 'conversations and spot patterns, not as an automated performance verdict.';
 }
 
-header(); teamCards(); trendChart(); peopleTable(); disclaimer();
+header(); alertsPanel(); teamCards(); trendChart(); peopleTable(); disclaimer();
+</script>
+</body>
+</html>
+"""
+
+# ----------------------------------------------------------------- user template
+_USER_TEMPLATE = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Activity — person detail</title>
+<style>
+  :root { --bg:#0f1216; --panel:#171b21; --ink:#e7edf3; --muted:#8b97a5;
+    --line:#252b33; }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f5f7fa; --panel:#fff; --ink:#1a2028; --muted:#5b6672; --line:#e4e9ef; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+    font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  header { padding:20px 24px; border-bottom:1px solid var(--line); }
+  h1 { margin:0; font-size:18px; }
+  a { color:#4aa3ff; text-decoration:none; }
+  .sub { color:var(--muted); font-size:12px; margin-top:4px; }
+  main { padding:20px 24px; max-width:1000px; margin:0 auto; display:grid; gap:20px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:16px 18px; }
+  .panel h2 { margin:0 0 12px; font-size:14px; text-transform:uppercase;
+    letter-spacing:.02em; color:var(--muted); }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:12px; }
+  .card { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:12px; }
+  .card .big { font-size:22px; font-weight:600; }
+  .card .lbl { color:var(--muted); font-size:12px; }
+  table { width:100%; border-collapse:collapse; }
+  th,td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-size:12px; }
+  td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+  .cols { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  .muted { color:var(--muted); }
+  .note { color:var(--muted); font-size:12px; border-top:1px solid var(--line);
+    padding-top:12px; margin-top:8px; }
+  .row { overflow-x:auto; }
+  @media (max-width:640px){ .cols{ grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <a href="/">← all staff</a>
+  <h1 id="title"></h1>
+  <div class="sub" id="subtitle"></div>
+</header>
+<main>
+  <section class="panel"><h2>Summary</h2><div class="cards" id="cards"></div></section>
+  <section class="panel"><h2>Daily active hours</h2><div class="row" id="dailyChart"></div></section>
+  <section class="panel"><h2>Weekly score trend</h2><div class="row" id="weekChart"></div></section>
+  <section class="cols">
+    <div class="panel"><h2>Top productive</h2><div id="topProd"></div></div>
+    <div class="panel"><h2>Top distracting</h2><div id="topDist"></div></div>
+  </section>
+  <section class="panel"><div class="note" id="disclaimer"></div></section>
+</main>
+
+<script id="payload" type="application/json">__DATA__</script>
+<script>
+const D = JSON.parse(document.getElementById('payload').textContent);
+const $ = (id)=>document.getElementById(id);
+const esc=(s)=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const scoreColor=(s)=>s>=75?'#2ecc71':s>=50?'#f1c40f':'#e74c3c';
+
+$('title').textContent = D.user;
+$('subtitle').textContent = `${D.organization||''}  ·  last ${D.range_days} days  ·  ${D.range.samples} samples`;
+
+function cards() {
+  if (!D.summary) { $('cards').innerHTML = '<p class="muted">No data in range.</p>'; return; }
+  const s = D.summary;
+  const c=(big,lbl,col)=>`<div class="card"><div class="big" style="color:${col||'inherit'}">`
+    +`${esc(big)}</div><div class="lbl">${esc(lbl)}</div></div>`;
+  $('cards').innerHTML = [
+    c(s.efficiency_score+'/100','efficiency score',scoreColor(s.efficiency_score)),
+    c(s.active_time,'active'),
+    c(s.idle_time,'idle'),
+    c((s.productive_ratio*100).toFixed(0)+'%','productive of active'),
+    c(s.focus.avg_session,'avg time-on-task'),
+  ].join('');
+}
+
+function barChart(el, items, valKey, labelKey, color) {
+  if (!items.length) { $(el).innerHTML='<p class="muted">No data.</p>'; return; }
+  const W=Math.max(480,items.length*54), H=200, padB=34, padT=10, padL=30;
+  const plotH=H-padB-padT, plotW=W-padL-10;
+  const max=Math.max(...items.map(d=>d[valKey]),0.01);
+  const bw=plotW/items.length*0.66;
+  let svg=`<svg width="${W}" height="${H}" role="img">`;
+  [0,max/2,max].forEach(g=>{const y=padT+plotH-(g/max)*plotH;
+    svg+=`<line x1="${padL}" y1="${y}" x2="${W-10}" y2="${y}" stroke="var(--line)"/>`
+      +`<text x="2" y="${y+4}" fill="var(--muted)" font-size="9">${g.toFixed(1)}</text>`;});
+  items.forEach((d,i)=>{const x=padL+i/items.length*plotW+ (plotW/items.length-bw)/2;
+    const h=(d[valKey]/max)*plotH; const y=padT+plotH-h;
+    svg+=`<rect x="${x}" y="${y}" width="${bw}" height="${h}" fill="${color}" rx="2">`
+      +`<title>${esc(d[labelKey])}: ${d[valKey]}</title></rect>`
+      +`<text x="${x+bw/2}" y="${H-8}" fill="var(--muted)" font-size="9" text-anchor="middle">`
+      +`${esc(String(d[labelKey]).slice(5))}</text>`;});
+  svg+='</svg>'; $(el).innerHTML=svg;
+}
+
+function weekChart() {
+  const pts=D.series||[];
+  if(!pts.length){$('weekChart').innerHTML='<p class="muted">No data.</p>';return;}
+  const W=Math.max(480,pts.length*70),H=200,padL=30,padB=28,padT=10;
+  const plotW=W-padL-10,plotH=H-padB-padT;
+  const x=i=>padL+(pts.length===1?plotW/2:i/(pts.length-1)*plotW);
+  const y=v=>padT+plotH-(v/100)*plotH;
+  let svg=`<svg width="${W}" height="${H}" role="img">`;
+  [0,50,100].forEach(g=>{svg+=`<line x1="${padL}" y1="${y(g)}" x2="${W-10}" y2="${y(g)}" `
+    +`stroke="var(--line)"/><text x="4" y="${y(g)+4}" fill="var(--muted)" font-size="9">${g}</text>`;});
+  const poly=pts.map((p,i)=>`${x(i)},${y(p.score)}`).join(' ');
+  svg+=`<polyline points="${poly}" fill="none" stroke="#4aa3ff" stroke-width="2"/>`;
+  pts.forEach((p,i)=>{svg+=`<circle cx="${x(i)}" cy="${y(p.score)}" r="3" fill="${scoreColor(p.score)}">`
+    +`<title>${esc(p.period)}: ${p.score}</title></circle>`
+    +`<text x="${x(i)}" y="${H-8}" fill="var(--muted)" font-size="9" text-anchor="middle">`
+    +`${esc(p.period.slice(5))}</text>`;});
+  svg+='</svg>'; $('weekChart').innerHTML=svg;
+}
+
+function topList(el, items) {
+  if(!items.length){$(el).innerHTML='<p class="muted">None.</p>';return;}
+  $(el).innerHTML='<table><tbody>'+items.map(t=>
+    `<tr><td>${esc(t.name)}</td><td class="num">${esc(t.human)}</td></tr>`).join('')+'</tbody></table>';
+}
+
+cards();
+barChart('dailyChart', D.daily||[], 'active_hours', 'date', '#4aa3ff');
+weekChart();
+topList('topProd', D.top_productive||[]);
+topList('topDist', D.top_distracting||[]);
+$('disclaimer').textContent =
+  'This view shows one person\'s desktop time and focus. It cannot see thinking, '
+  + 'meetings away from the machine, or the quality of what was produced. Use it to '
+  + 'inform a conversation, never as a standalone performance judgement.';
 </script>
 </body>
 </html>

@@ -88,6 +88,25 @@ class Storage:
         sql += " ORDER BY ts"
         return self._conn.execute(sql, params).fetchall()
 
+    def purge_older_than(self, cutoff_iso: str) -> int:
+        """Delete samples with ts strictly older than cutoff_iso. Returns count."""
+        cur = self._conn.execute("DELETE FROM samples WHERE ts < ?", (cutoff_iso,))
+        self._conn.commit()
+        return cur.rowcount
+
+    def distinct_users(self, since: Optional[str] = None) -> list[str]:
+        sql = "SELECT DISTINCT user FROM samples"
+        params: list = []
+        if since:
+            sql += " WHERE ts >= ?"
+            params.append(since)
+        sql += " ORDER BY user"
+        return [r["user"] for r in self._conn.execute(sql, params).fetchall()]
+
+    def oldest_ts(self) -> Optional[str]:
+        row = self._conn.execute("SELECT MIN(ts) AS m FROM samples").fetchone()
+        return row["m"] if row and row["m"] else None
+
     def close(self) -> None:
         self._conn.close()
 

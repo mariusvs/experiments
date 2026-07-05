@@ -50,15 +50,20 @@ class Agent:
         self._install_signal_handlers()
         self._maybe_start_uploader()
         self._start_tray_if_enabled()
+        self._purge_now()  # enforce retention on startup
 
         print(f"Staff Activity Tracker running. Data -> {self.config.db_path}")
         print("Press Ctrl+C to stop.")
 
         interval = max(1.0, float(self.config.sample_interval))
+        next_purge = time.monotonic() + 86400.0  # daily
         try:
             while not self._stop.is_set():
                 start = time.monotonic()
                 self._collect_one(interval)
+                if start >= next_purge:
+                    self._purge_now()
+                    next_purge = start + 86400.0
                 elapsed = time.monotonic() - start
                 self._stop.wait(max(0.0, interval - elapsed))
         finally:
@@ -94,6 +99,16 @@ class Agent:
             mouse_count=snap.mouse_count,
             mouse_dist=snap.mouse_dist,
         )
+
+    def _purge_now(self) -> None:
+        from . import retention
+        try:
+            removed = retention.purge(self.storage, self.config.retention_days)
+            if removed:
+                print(f"[retention] purged {removed} sample(s) older than "
+                      f"{self.config.retention_days} days")
+        except Exception as exc:
+            print(f"[retention] purge failed: {exc}")
 
     # -------------------------------------------------------------- uploader
     def _maybe_start_uploader(self) -> None:

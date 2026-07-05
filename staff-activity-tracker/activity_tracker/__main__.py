@@ -6,6 +6,9 @@
     python -m activity_tracker trends [--config PATH] [--weeks N] [--period-days N] [--json]
     python -m activity_tracker team [--config PATH] [--days N] [--json]
     python -m activity_tracker dashboard [--config PATH] [--host H] [--port P]
+    python -m activity_tracker alerts [--config PATH] [--json] [--webhook]
+    python -m activity_tracker export {samples-csv|efficiency-csv|pdf} OUT [--days N]
+    python -m activity_tracker purge [--config PATH] [--days N]
     python -m activity_tracker notice [--config PATH]
     python -m activity_tracker init-config PATH
 """
@@ -108,6 +111,66 @@ def cmd_dashboard(args) -> int:
         days=args.days, weeks=args.weeks, period_days=args.period_days)
 
 
+def cmd_purge(args) -> int:
+    from .storage import Storage
+    from . import retention
+    config = Config.load(args.config)
+    days = args.days if args.days is not None else config.retention_days
+    storage = Storage(config.db_path)
+    try:
+        if not days or days <= 0:
+            print("Retention disabled (days <= 0). Nothing purged.")
+            return 0
+        removed = retention.purge(storage, days)
+    finally:
+        storage.close()
+    print(f"Purged {removed} sample(s) older than {days} days.")
+    return 0
+
+
+def cmd_alerts(args) -> int:
+    from .storage import Storage
+    from . import alerts as alerts_mod
+    config = Config.load(args.config)
+    categories = args.categories or config.categories_file or None
+    storage = Storage(config.db_path)
+    try:
+        found = alerts_mod.evaluate(storage, config, categories_path=categories,
+                                    period_days=args.period_days)
+    finally:
+        storage.close()
+    if args.json:
+        print(json.dumps(found, indent=2))
+    else:
+        print(alerts_mod.render_text(found))
+    if args.webhook and found:
+        ok = alerts_mod.post_webhook(found, config)
+        print(f"[webhook] {'delivered' if ok else 'not delivered'}")
+    return 0
+
+
+def cmd_export(args) -> int:
+    from .storage import Storage
+    from . import export as export_mod, report as report_mod
+    config = Config.load(args.config)
+    storage = Storage(config.db_path)
+    since = report_mod.default_since(args.days) if args.days else None
+    try:
+        if args.format == "samples-csv":
+            n = export_mod.export_samples_csv(storage, args.out, since=since)
+            print(f"Wrote {n} sample rows to {args.out}")
+        elif args.format == "efficiency-csv":
+            n = export_mod.export_efficiency_csv(storage, args.out, config, since=since)
+            print(f"Wrote {n} user rows to {args.out}")
+        elif args.format == "pdf":
+            path = export_mod.export_pdf(storage, args.out, config,
+                                         days=args.days or 7)
+            print(f"Wrote PDF report to {path}")
+    finally:
+        storage.close()
+    return 0
+
+
 def cmd_notice(args) -> int:
     config = Config.load(args.config)
     print(consent.notice_text(config.upload_url))
@@ -170,6 +233,30 @@ def build_parser() -> argparse.ArgumentParser:
     db.add_argument("--weeks", type=int, default=8, help="Periods in the trend chart")
     db.add_argument("--period-days", type=int, default=7, help="Days per trend period")
     db.set_defaults(func=cmd_dashboard)
+
+    pg = sub.add_parser("purge", help="Delete samples older than the retention window")
+    pg.add_argument("--config", help="Path to JSON config file")
+    pg.add_argument("--days", type=int, default=None,
+                    help="Override retention_days (deletes samples older than this)")
+    pg.set_defaults(func=cmd_purge)
+
+    al = sub.add_parser("alerts", help="Evaluate threshold alerts")
+    al.add_argument("--config", help="Path to JSON config file")
+    al.add_argument("--categories", help="Path to categories JSON (overrides config)")
+    al.add_argument("--period-days", type=int, default=7, help="Days per period")
+    al.add_argument("--webhook", action="store_true",
+                    help="Also POST alerts to alert_webhook_url from config")
+    al.add_argument("--json", action="store_true", help="Emit JSON instead of text")
+    al.set_defaults(func=cmd_alerts)
+
+    ex = sub.add_parser("export", help="Export data to CSV or PDF")
+    ex.add_argument("format", choices=["samples-csv", "efficiency-csv", "pdf"],
+                    help="What to export")
+    ex.add_argument("out", help="Output file path")
+    ex.add_argument("--config", help="Path to JSON config file")
+    ex.add_argument("--days", type=int, default=7,
+                    help="Look back this many days (0 = all, for samples-csv)")
+    ex.set_defaults(func=cmd_export)
 
     n = sub.add_parser("notice", help="Print the monitoring notice text")
     n.add_argument("--config", help="Path to JSON config file")

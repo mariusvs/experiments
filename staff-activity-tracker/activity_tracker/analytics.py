@@ -192,6 +192,67 @@ def team_rollup(
     }
 
 
+# -------------------------------------------------------------- per-user detail
+def user_detail(
+    storage: Storage,
+    user: str,
+    categories_path: Optional[str] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    num_periods: int = 8,
+    period_days: int = 7,
+    weights: Optional[dict] = None,
+    anchor: Optional[datetime] = None,
+) -> dict:
+    """Full drill-down for one user: summary, weekly series, category split,
+    top apps/sites, and a per-day breakdown."""
+    cats = eff.load_categories(categories_path)
+    weights = weights or eff.DEFAULT_WEIGHTS
+    rows = [r for r in storage.query(since=since, until=until)
+            if (r["user"] or "unknown") == user]
+
+    summary = None
+    category_hours: dict = {}
+    top_productive: list = []
+    top_distracting: list = []
+    if rows:
+        m = eff.compute_user_metrics(rows, cats, weights)
+        summary = eff._format_user(m)
+        category_hours = {k: round(v / 3600, 2) for k, v in sorted(m["cat_time"].items())}
+        top_productive = eff._top_labels(m["app_by_cat"], "productive")
+        top_distracting = eff._top_labels(m["app_by_cat"], "distracting")
+
+    # weekly series for just this user
+    ws = weekly_series(storage, categories_path, num_periods, period_days, weights, anchor)
+    series = ws["series"].get(user, [])
+
+    # per-day breakdown
+    by_day: dict[str, list] = defaultdict(list)
+    for r in rows:
+        by_day[(r["ts"] or "")[:10]].append(r)
+    daily = []
+    for day in sorted(by_day):
+        dm = eff.compute_user_metrics(by_day[day], cats, weights)
+        daily.append({
+            "date": day,
+            "active_hours": round(dm["active"] / 3600, 2),
+            "productive_ratio": round(dm["productive_ratio"], 3),
+            "score": dm["score"],
+        })
+
+    return {
+        "user": user,
+        "range": {"since": since, "until": until, "samples": len(rows)},
+        "summary": summary,
+        "periods": ws["periods"],
+        "series": series,
+        "category_hours": category_hours,
+        "top_productive": top_productive,
+        "top_distracting": top_distracting,
+        "daily": daily,
+    }
+
+
 # --------------------------------------------------------------- text rendering
 def render_trends_text(report: dict) -> str:
     lines = ["=" * 64, "STAFF EFFICIENCY TRENDS "

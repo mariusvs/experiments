@@ -58,6 +58,18 @@ class Config:
     # distracting for the efficiency report. Blank = nothing categorized.
     categories_file: str = ""
 
+    # Data retention: delete raw samples older than this many days. The agent
+    # purges on startup and once a day. 0 = keep forever (not recommended —
+    # minimising retention is a core data-protection principle).
+    retention_days: int = 90
+
+    # Alert thresholds (see alerts.py). A threshold of 0 disables that rule.
+    alert_weekly_score_drop: float = 20.0     # flag a week-over-week score fall >= this
+    alert_min_active_ratio: float = 0.0       # flag if active/tracked below this
+    alert_max_distracting_ratio: float = 0.5  # flag if distracting/active above this
+    alert_min_active_hours: float = 0.0       # flag if weekly active hours below this
+    alert_webhook_url: str = ""               # optional HTTPS POST for alerts
+
     @property
     def db_path(self) -> Path:
         return Path(self.data_dir) / self.db_filename

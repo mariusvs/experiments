@@ -13,5 +13,11 @@
   "upload_interval": 300.0,
   "organization": "Your Company Ltd",
   "device_label": "reception-pc-01",
-  "categories_file": "categories.example.json"
+  "categories_file": "categories.example.json",
+  "retention_days": 90,
+  "alert_weekly_score_drop": 20.0,
+  "alert_min_active_ratio": 0.0,
+  "alert_max_distracting_ratio": 0.5,
+  "alert_min_active_hours": 0.0,
+  "alert_webhook_url": ""
 }
