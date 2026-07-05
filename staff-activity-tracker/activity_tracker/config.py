@@ -70,6 +70,19 @@ class Config:
     alert_min_active_hours: float = 0.0       # flag if weekly active hours below this
     alert_webhook_url: str = ""               # optional HTTPS POST for alerts
 
+    # Dashboard authentication (SSO via OAuth2/OIDC). When auth_enabled is False
+    # the dashboard is unauthenticated and must stay bound to localhost.
+    auth_enabled: bool = False
+    auth_provider: str = "google"             # "google" or "microsoft"
+    oauth_client_id: str = ""
+    oauth_client_secret: str = ""
+    oauth_redirect_url: str = ""              # public https URL of /auth/callback
+    oauth_tenant: str = "organizations"       # Microsoft only: tenant id or "organizations"
+    auth_allowed_domain: str = ""             # e.g. "scigrow.tech" (email must end with @it)
+    auth_allowed_emails: list = field(default_factory=list)  # explicit manager allow-list
+    session_secret: str = ""                  # HMAC key for signing session cookies
+    session_ttl: float = 43200.0              # session lifetime, seconds (12h)
+
     @property
     def db_path(self) -> Path:
         return Path(self.data_dir) / self.db_filename

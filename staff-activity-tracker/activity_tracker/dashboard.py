@@ -75,19 +75,62 @@ class _Handler(BaseHTTPRequestHandler):
     weeks: int
     period_days: int
 
-    def _send(self, code: int, body: bytes, ctype: str) -> None:
+    def _send(self, code: int, body: bytes, ctype: str, extra=None) -> None:
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        # Local-only tool; a conservative CSP that permits our inline SVG/JS.
+        # Conservative CSP that permits our inline SVG/JS.
         self.send_header("Content-Security-Policy",
                          "default-src 'none'; style-src 'unsafe-inline'; "
                          "script-src 'unsafe-inline'; img-src 'self' data:")
+        for k, v in (extra or []):
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
+    # -------------------------------------------------------------- auth utils
+    def _cookies(self) -> dict:
+        from http.cookies import SimpleCookie
+        raw = self.headers.get("Cookie", "")
+        jar = SimpleCookie()
+        try:
+            jar.load(raw)
+        except Exception:
+            return {}
+        return {k: m.value for k, m in jar.items()}
+
+    def _current_user(self):
+        from . import auth
+        if not self.config.auth_enabled:
+            return None  # auth disabled; caller allows access
+        cookie = self._cookies().get("sat_session", "")
+        return auth.session_email(cookie, self.config.session_secret)
+
+    def _cookie_flags(self) -> str:
+        secure = self.config.oauth_redirect_url.lower().startswith("https")
+        flags = "Path=/; HttpOnly; SameSite=Lax"
+        return flags + ("; Secure" if secure else "")
+
+    def _redirect(self, location: str, extra=None) -> None:
+        self._send(302, b"", "text/plain", extra=[("Location", location)] + (extra or []))
+
+    def _error_page(self, code: int, message: str) -> None:
+        html = (f"<!doctype html><meta charset=utf-8>"
+                f"<div style='font:15px system-ui;margin:12% auto;max-width:26rem;"
+                f"text-align:center;color:#333'><h2>{code}</h2><p>{message}</p>"
+                f"<p><a href='/'>Back</a></p></div>")
+        self._send(code, html.encode("utf-8"), "text/html; charset=utf-8")
+
+    # ------------------------------------------------------------------- routes
     def do_GET(self):  # noqa: N802 (http.server API)
         route = urlparse(self.path).path
+        if route.startswith("/auth/"):
+            return self._handle_auth(route)
+        if self.config.auth_enabled and not self._current_user():
+            return self._redirect("/auth/login")
+        return self._handle_app(route)
+
+    def _handle_app(self, route: str) -> None:
         if route in ("/", "/index.html"):
             data = collect_data(self.config, self.days, self.weeks, self.period_days)
             self._send(200, render_page(data).encode("utf-8"), "text/html; charset=utf-8")
@@ -112,20 +155,74 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             self._send(404, b"not found", "text/plain")
 
+    def _handle_auth(self, route: str) -> None:
+        from . import auth
+        cfg = self.config
+        if not cfg.auth_enabled:
+            return self._error_page(404, "Authentication is not enabled.")
+        try:
+            if route == "/auth/login":
+                state = auth.make_state(cfg.session_secret)
+                url = auth.authorize_url(cfg, state)
+                self._redirect(url, extra=[(
+                    "Set-Cookie", f"sat_state={state}; Max-Age=600; {self._cookie_flags()}")])
+            elif route == "/auth/logout":
+                self._redirect("/auth/login", extra=[(
+                    "Set-Cookie", f"sat_session=; Max-Age=0; {self._cookie_flags()}")])
+            elif route == "/auth/callback":
+                self._handle_callback()
+            else:
+                self._error_page(404, "Unknown auth route.")
+        except auth.AuthError as exc:
+            self._error_page(500, f"Sign-in failed: {exc}")
+        except Exception as exc:
+            self._error_page(502, f"Sign-in could not be completed ({exc}).")
+
+    def _handle_callback(self) -> None:
+        from urllib.parse import parse_qs
+        from . import auth
+        cfg = self.config
+        q = parse_qs(urlparse(self.path).query)
+        code = (q.get("code") or [""])[0]
+        state = (q.get("state") or [""])[0]
+        cookie_state = self._cookies().get("sat_state", "")
+        # CSRF: the state we set as a cookie must match the one returned, and be valid.
+        if not state or state != cookie_state or not auth.unsign(state, cfg.session_secret):
+            return self._error_page(400, "Invalid or expired sign-in request. Try again.")
+        if not code:
+            return self._error_page(400, "No authorization code returned.")
+        token = auth.exchange_code(cfg, code)
+        email = auth.fetch_email(cfg, token)
+        if not auth.is_authorized(email, cfg):
+            return self._error_page(
+                403, f"{email or 'This account'} is not authorized for this dashboard.")
+        session = auth.make_session(email, cfg.session_secret, cfg.session_ttl)
+        self._redirect("/", extra=[
+            ("Set-Cookie", f"sat_session={session}; Max-Age={int(cfg.session_ttl)}; "
+                           f"{self._cookie_flags()}"),
+            ("Set-Cookie", f"sat_state=; Max-Age=0; {self._cookie_flags()}"),
+        ])
+
     def log_message(self, *args):  # keep the console quiet
         pass
 
 
 def serve(config: Config, host: str = "127.0.0.1", port: int = 8787,
           days: int = 7, weeks: int = 8, period_days: int = 7) -> int:
+    if config.auth_enabled:
+        _prepare_auth(config)
     handler = type("Handler", (_Handler,), {
         "config": config, "days": days, "weeks": weeks, "period_days": period_days,
     })
     httpd = ThreadingHTTPServer((host, port), handler)
+    scheme = "https" if config.oauth_redirect_url.lower().startswith("https") else "http"
     print(f"Dashboard on http://{host}:{port}  (Ctrl+C to stop)")
-    if host not in ("127.0.0.1", "localhost", "::1"):
-        print("WARNING: bound to a non-local address. Put this behind auth/VPN — "
-              "it exposes staff activity data with no login.")
+    if config.auth_enabled:
+        print(f"SSO enabled ({config.auth_provider}). Access requires sign-in via "
+              f"{config.oauth_redirect_url or '<oauth_redirect_url not set!>'}")
+    elif host not in ("127.0.0.1", "localhost", "::1"):
+        print("WARNING: bound to a non-local address with NO authentication. "
+              "Set auth_enabled or put this behind a VPN — it exposes staff data.")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -133,6 +230,26 @@ def serve(config: Config, host: str = "127.0.0.1", port: int = 8787,
     finally:
         httpd.server_close()
     return 0
+
+
+def _prepare_auth(config: Config) -> None:
+    """Validate auth config and ensure a session secret exists."""
+    missing = [k for k in ("oauth_client_id", "oauth_client_secret", "oauth_redirect_url")
+               if not getattr(config, k)]
+    if missing:
+        raise SystemExit(f"auth_enabled but missing config: {', '.join(missing)}")
+    if not (config.auth_allowed_domain or config.auth_allowed_emails):
+        raise SystemExit("auth_enabled but neither auth_allowed_domain nor "
+                         "auth_allowed_emails set — nobody would be authorized "
+                         "(this tool fails closed).")
+    if not config.session_secret:
+        import secrets
+        config.session_secret = secrets.token_hex(32)
+        print("NOTE: no session_secret set — generated a temporary one. Sessions "
+              "will not survive a restart. Set session_secret in config to persist.")
+    if not config.oauth_redirect_url.lower().startswith("https"):
+        print("WARNING: oauth_redirect_url is not https. Run this behind a TLS "
+              "reverse proxy in production; browsers require Secure cookies for SSO.")
 
 
 # ---------------------------------------------------------------------- template

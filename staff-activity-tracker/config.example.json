@@ -19,5 +19,15 @@
   "alert_min_active_ratio": 0.0,
   "alert_max_distracting_ratio": 0.5,
   "alert_min_active_hours": 0.0,
-  "alert_webhook_url": ""
+  "alert_webhook_url": "",
+  "auth_enabled": false,
+  "auth_provider": "google",
+  "oauth_client_id": "",
+  "oauth_client_secret": "",
+  "oauth_redirect_url": "https://dashboard.example.com/auth/callback",
+  "oauth_tenant": "organizations",
+  "auth_allowed_domain": "",
+  "auth_allowed_emails": [],
+  "session_secret": "",
+  "session_ttl": 43200.0
 }

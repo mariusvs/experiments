@@ -246,11 +246,62 @@ Click any person's name (or an alert's **view →**) to open a **per-person
 drill-down** at `/user/<name>`: their summary cards, a daily active-hours bar
 chart, a weekly score trend, and their top productive/distracting apps and sites.
 
-> **Security:** the dashboard has **no authentication** and shows staff activity
-> data. It binds to `127.0.0.1` by default — keep it there. If you must reach it
-> from another machine, put it behind a VPN or an authenticating reverse proxy;
-> do not expose it to the internet. Access to these reports should be limited to
-> the specific managers/HR who have a legitimate need.
+> **Security:** with `auth_enabled` off (the default), the dashboard has **no
+> login** — keep it bound to `127.0.0.1`. To host it for a team, turn on SSO
+> (below); access is then limited to signed-in accounts in your domain / allow-list.
+
+### Dashboard SSO (Google or Microsoft)
+
+Let managers sign in with their existing work accounts. The dashboard uses the
+OAuth2 authorization-code flow and confirms identity via the provider's
+`userinfo` endpoint (no local JWT handling), issues a signed session cookie, and
+**fails closed** — nobody is allowed in unless their verified email matches
+`auth_allowed_domain` and/or `auth_allowed_emails`.
+
+**1. Register an OAuth client**
+
+- **Google:** [Google Cloud Console](https://console.cloud.google.com/) → APIs &
+  Services → Credentials → *Create OAuth client ID* → *Web application*. Add your
+  callback URL (e.g. `https://dashboard.example.com/auth/callback`) as an
+  authorized redirect URI. Copy the client ID and secret.
+- **Microsoft:** [Entra ID](https://entra.microsoft.com/) → App registrations →
+  *New registration* → add the same redirect URI as a *Web* platform. Copy the
+  Application (client) ID, create a client secret, and note your tenant ID.
+
+**2. Configure**
+
+```json
+{
+  "auth_enabled": true,
+  "auth_provider": "google",
+  "oauth_client_id": "…",
+  "oauth_client_secret": "…",
+  "oauth_redirect_url": "https://dashboard.example.com/auth/callback",
+  "oauth_tenant": "organizations",
+  "auth_allowed_domain": "scigrow.tech",
+  "auth_allowed_emails": ["hr-lead@scigrow.tech"],
+  "session_secret": "run: python -c \"import secrets;print(secrets.token_hex(32))\"",
+  "session_ttl": 43200
+}
+```
+
+- `auth_allowed_domain` — anyone with a verified `@domain` email may sign in.
+- `auth_allowed_emails` — if set, **only** these exact emails get in (this
+  narrows the domain rather than widening it).
+- `session_secret` — a long random string; set it so sessions survive restarts.
+
+**3. Front it with HTTPS.** The built-in server is not a hardened public web
+server, and OAuth requires an `https` redirect URL (browsers need `Secure`
+cookies). Run it behind a TLS reverse proxy (Caddy, nginx, Cloudflare Tunnel)
+that forwards to `127.0.0.1:8787`. Then:
+
+```bash
+python -m activity_tracker dashboard --config myconfig.json
+# sign-in at https://dashboard.example.com  →  /auth/login → provider → back in
+```
+
+Routes: `/auth/login`, `/auth/callback`, `/auth/logout`. Every other route
+requires a valid session or you're bounced to the provider.
 
 ## Alerts
 
@@ -360,6 +411,7 @@ activity_tracker/
   export.py              CSV + PDF export
   pdf.py                 minimal pure-stdlib PDF writer
   dashboard.py           self-contained stdlib web dashboard + per-person pages
+  auth.py                OAuth2/OIDC SSO gating for the dashboard
   tray.py                optional visible tray indicator
   collectors/
     base.py              WindowInfo + platform dispatch
@@ -371,6 +423,7 @@ tests/test_core.py       headless tests (incl. the no-content guard)
 tests/test_efficiency.py efficiency scoring tests (incl. the input-volume guard)
 tests/test_analytics.py  trends, team roll-up, and dashboard-page tests
 tests/test_features.py   retention, alerts, CSV/PDF export, per-user drill-down
+tests/test_auth.py       SSO token signing, authorization rules, route gating
 ```
 
 ## Tests
